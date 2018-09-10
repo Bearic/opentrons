@@ -99,19 +99,21 @@ def enter_bootloader(module):
     being either different or same as the one that the module was originally on
     So we check for changes in ports and use the appropriate one
     """
-    ports_before_dfu_mode = discover_ports()  # Required only for old bootloadr
+    ports_before_dfu_mode = _discover_ports()  # Required for old bootloader
 
     module._driver.enter_programming_mode()
     module.disconnect()
-
+    new_port = ''
     port_poll_timer = Process(target=timer)
     port_poll_timer.start()
     while port_poll_timer.is_alive():
-        new_port = port_poll(has_old_bootloader(module), ports_before_dfu_mode)
+        new_port = _port_poll(
+            _has_old_bootloader(module), ports_before_dfu_mode)
         if new_port:
-            print("Found new port: {}".format(new_port))
-            module._port = new_port
+            log.debug("Found new (bootloader) port: {}".format(new_port))
+            # module._port = new_port
             break
+    return new_port
 
 
 async def update_firmware(module, firmware_file_path, config_file_path, loop):
@@ -124,71 +126,105 @@ async def update_firmware(module, firmware_file_path, config_file_path, loop):
     """
     # TODO: Make sure the module isn't in the middle of operation
 
-    ports_before_update = discover_ports()
-    print("update_firmware sending file to port:{}".format(module._port))
+    ports_before_update = _discover_ports()
 
     proc = await asyncio.create_subprocess_exec(
         'avrdude', '-C{}'.format(config_file_path), '-v',
         '-p{}'.format(PART_NO),
         '-c{}'.format(PROGRAMMER_ID),
-        '-P{}'.format(module._port),
+        '-P{}'.format(module.port),
         '-b{}'.format(BAUDRATE), '-D',
         '-Uflash:w:{}:i'.format(firmware_file_path),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE, loop=loop)
+    # TODO: raise exception on non zero returncode
     await proc.wait()
-    _res = await proc.communicate()
-    res = _res[1].decode().strip()
+    _result = await proc.communicate()
+    result = _result[1].decode()
+    log.debug(result)
+    log.debug("Switching back to non-bootloader port")
+    module._port = _port_on_mode_switch(ports_before_update)
 
-    print("Switching back to non-bootloader port")
-    module._port = port_on_mode_switch(ports_before_update)
+    return _format_avrdude_response(result)
 
-    if 'flash verified' in res:
-        msg = 'Firmware uploaded successfully'
-    else:
-        msg = 'Firmware upload failed\n{}'.format(res)
-    log.debug(msg)
-    return msg
+
+def _format_avrdude_response(raw_response):
+    response_msg = {'result': '', 'avrdude_response': ''}
+    avrdude_log = ''
+    for line in raw_response.splitlines():
+        if 'avrdude:' in line and line != raw_response.splitlines()[1]:
+            avrdude_log += line.lstrip('avrdude:') + '..'
+            if 'flash verified' in line:
+                response_msg['result'] = 'Firmware update successful'
+                response_msg['avrdude_response'] = line.lstrip('avrdude: ')
+    if not response_msg['result']:
+        response_msg['result'] = 'Firmware update failed'
+        response_msg['avrdude_response'] = avrdude_log
+    return response_msg
 
 
 def timer():
     sleep(PORT_SEARCH_TIMEOUT)
 
 
-def port_on_mode_switch(ports_before_switch):
-    ports_after_switch = discover_ports()
+def _port_on_mode_switch(ports_before_switch):
+    ports_after_switch = _discover_ports()
     new_port = ''
     if len(ports_after_switch) >= len(ports_before_switch) and \
             not set(ports_before_switch) == set(ports_after_switch):
         new_ports = list(filter(
             lambda x: x not in ports_before_switch,
             ports_after_switch))
-        # Ideally, should raise an error if len(new_ports) is > 1
+        if len(new_ports) > 1:
+            raise OSError('Multiple new ports found on mode switch')
         new_port = '/dev/modules/{}'.format(new_ports[0])
     return new_port
 
 
-def port_poll(old_bootloader, ports_before_switch=None):
+def _port_poll(old_bootloader, ports_before_switch=None):
     """
     Checks for the bootloader port
     """
     new_port = ''
     if old_bootloader:
-        new_port = port_on_mode_switch(ports_before_switch)
+        new_port = _port_on_mode_switch(ports_before_switch)
     else:
         discovered_ports = list(filter(
-            lambda x: x.endswith('bootloader'), discover_ports()))
+            lambda x: x.endswith('bootloader'), _discover_ports()))
         if len(discovered_ports) == 1:
             new_port = '/dev/modules/{}'.format(discovered_ports[0])
     return new_port
 
 
-def has_old_bootloader(module):
+def _has_old_bootloader(module):
     return True if module.device_info.get('model') == 'temp_deck_v1' or \
                    module.device_info.get('model') == 'temp_deck_v2' else False
 
 
-def discover_ports():
+# async def _discover_ports():
+#     devices = []
+#     if os.environ.get('RUNNING_ON_PI') and os.path.isdir('/dev/modules'):
+#         # try:
+#         #     devices = os.listdir('/dev/modules')
+#         # except FileNotFoundError:
+#         #     try:
+#         #         sleep(2)
+#         #         # Try again. Measure for race condition where port is being
+#         #         # switched in between isdir('/dev/modules') and
+#         #         # listdir('/dev/modules')
+#         #         devices = os.listdir('/dev/modules')
+#         #     except FileNotFoundError:
+#         #         raise Exception("No /dev/modules found. Try again")
+#         for attempt in range(2):
+#             try:
+#                 return os.listdir('/dev/modules')
+#             except FileNotFoundError:
+#                 pass
+#             await asyncio.sleep(2)
+#         raise Exception("No /dev/modules found. Try again")
+#     return devices
+
+def _discover_ports():
     devices = []
     if os.environ.get('RUNNING_ON_PI') and os.path.isdir('/dev/modules'):
         try:

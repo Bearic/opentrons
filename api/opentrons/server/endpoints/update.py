@@ -1,8 +1,10 @@
 import logging
 import asyncio
 import os
+import opentrons
 from aiohttp import web
 from opentrons import robot
+from opentrons import modules
 
 log = logging.getLogger(__name__)
 
@@ -57,43 +59,46 @@ async def update_module_firmware(request):
     log.debug('Update Firmware request received')
     data = await request.post()
     module_serial = request.match_info['serial']
-    try:
-        res = await _update_module_firmware(module_serial,
-                                            data['module_firmware'],
-                                            request.loop)
+
+    res = await _update_module_firmware(module_serial,
+                                        data['module_firmware'],
+                                        request.loop)
+    if 'successful' not in res['result']:
+        if 'avrdude_response' in res and \
+                'checksum mismatch' in res['avrdude_response']:
+                status = 400
+        else:
+            status = 500
+    else:
         status = 200
-    except Exception as e:
-        log.exception("Exception during firmware update:")
-        res = {'message': 'Exception {} raised by update of {}: {}'.format(
-            type(e), data, e.__traceback__)}
-        status = 500
+    log.info(res)
     return web.json_response(res, status=status)
 
 
 async def _update_module_firmware(module_serial, data, loop=None):
-    import opentrons
 
     fw_filename = data.filename
-    log.info('Flashing image "{}", this will take about a minute'.format(
+    log.info('Preparing to flash firmware image {}'.format(
         fw_filename))
     content = data.file.read()
 
     with open(fw_filename, 'wb') as wf:
         wf.write(content)
 
-    config_file_path = os.path.join(
-        os.path.abspath(os.path.dirname(opentrons.__file__)),
-        'config', 'modules', 'avrdude.conf')
+    config_file_path = os.path.join(opentrons.HERE,
+                                    'config', 'modules', 'avrdude.conf')
 
+    # returns a dict of 'Result' & 'AVRDude_response'
     msg = await _upload_to_module(module_serial, fw_filename,
                                   config_file_path, loop=loop)
-    log.debug('Firmware update complete')
+    log.info('Firmware update complete')
     try:
         os.remove(fw_filename)
     except OSError:
         pass
-    log.debug("Result: {}".format(msg))
-    return {'message': msg, 'filename': fw_filename}
+    # Add firmware filename to response message
+    msg['filename'] = fw_filename
+    return msg
 
 
 async def _upload_to_module(serialnum, fw_filename, config_file_path, loop):
@@ -103,7 +108,6 @@ async def _upload_to_module(serialnum, fw_filename, config_file_path, loop):
     lib project eventually and use its own driver object (preferably involving
     moving the drivers themselves to the serverlib)
     """
-    from opentrons import modules
 
     # ensure there is a reference to the port
     if not robot.is_connected():
@@ -114,11 +118,17 @@ async def _upload_to_module(serialnum, fw_filename, config_file_path, loop):
     res = ''
     for module in robot.modules:
         if module.device_info.get('serial') == serialnum:
-            print("Module with serial found")
-            modules.enter_bootloader(module)
+            log.info("Module with serial {} found".format(serialnum))
+            bootloader_port = modules.enter_bootloader(module)
+            if bootloader_port:
+                module._port = bootloader_port
+            # else assume old bootloader connection on existing module port
+            log.info("Uploading file to port:{} using config file {}".format(
+                module.port, config_file_path))
+            log.info("Flashing firmware. This will take a few seconds")
             res = await modules.update_firmware(
                 module, fw_filename, config_file_path, loop)
             break
     if not res:
-        res = 'Module {} not found'.format(serialnum)
+        res = {'result': 'Module {} not found'.format(serialnum)}
     return res
