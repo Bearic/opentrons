@@ -69,9 +69,10 @@ async def update_module_firmware(request):
                 status = 400
         else:
             status = 500
+        log.error(res)
     else:
         status = 200
-    log.info(res)
+        log.info(res)
     return web.json_response(res, status=status)
 
 
@@ -119,15 +120,18 @@ async def _upload_to_module(serialnum, fw_filename, config_file_path, loop):
     for module in robot.modules:
         if module.device_info.get('serial') == serialnum:
             log.info("Module with serial {} found".format(serialnum))
-            bootloader_port = modules.enter_bootloader(module)
+            bootloader_port = await modules.enter_bootloader(module)
             if bootloader_port:
                 module._port = bootloader_port
             # else assume old bootloader connection on existing module port
             log.info("Uploading file to port:{} using config file {}".format(
                 module.port, config_file_path))
             log.info("Flashing firmware. This will take a few seconds")
-            res = await modules.update_firmware(
-                module, fw_filename, config_file_path, loop)
+            try:
+                res = await asyncio.wait_for(modules.update_firmware(
+                    module, fw_filename, config_file_path, loop), 15)
+            except asyncio.TimeoutError:
+                return {'result': 'AVRDUDE not responding'}
             break
     if not res:
         res = {'result': 'Module {} not found'.format(serialnum)}

@@ -2,8 +2,9 @@ import os
 import logging
 import re
 import asyncio
-from time import sleep
-from multiprocessing import Process
+import time
+# from time import sleep
+# from multiprocessing import Process
 from opentrons.modules.magdeck import MagDeck
 from opentrons.modules.tempdeck import TempDeck
 from opentrons import robot, labware
@@ -87,7 +88,7 @@ def discover_and_connect():
     return discovered_modules
 
 
-def enter_bootloader(module):
+async def enter_bootloader(module):
     """
     Using the driver method, enter bootloader mode of the atmega32u4.
     The bootloader mode opens a new port on the uC to upload the hex file.
@@ -99,20 +100,21 @@ def enter_bootloader(module):
     being either different or same as the one that the module was originally on
     So we check for changes in ports and use the appropriate one
     """
-    ports_before_dfu_mode = _discover_ports()  # Required for old bootloader
+    # Required for old bootloader
+    ports_before_dfu_mode = await _discover_ports()
 
     module._driver.enter_programming_mode()
     module.disconnect()
     new_port = ''
-    port_poll_timer = Process(target=timer)
-    port_poll_timer.start()
-    while port_poll_timer.is_alive():
-        new_port = _port_poll(
+    then = time.time()
+    while time.time() - then < PORT_SEARCH_TIMEOUT:
+        new_port = await _port_poll(
             _has_old_bootloader(module), ports_before_dfu_mode)
         if new_port:
             log.debug("Found new (bootloader) port: {}".format(new_port))
-            # module._port = new_port
             break
+        else:
+            await asyncio.sleep(0.05)
     return new_port
 
 
@@ -126,7 +128,7 @@ async def update_firmware(module, firmware_file_path, config_file_path, loop):
     """
     # TODO: Make sure the module isn't in the middle of operation
 
-    ports_before_update = _discover_ports()
+    ports_before_update = await _discover_ports()
 
     proc = await asyncio.create_subprocess_exec(
         'avrdude', '-C{}'.format(config_file_path), '-v',
@@ -139,6 +141,7 @@ async def update_firmware(module, firmware_file_path, config_file_path, loop):
         stderr=asyncio.subprocess.PIPE, loop=loop)
     # TODO: raise exception on non zero returncode
     await proc.wait()
+
     _result = await proc.communicate()
     result = _result[1].decode()
     log.debug(result)
@@ -163,12 +166,8 @@ def _format_avrdude_response(raw_response):
     return response_msg
 
 
-def timer():
-    sleep(PORT_SEARCH_TIMEOUT)
-
-
-def _port_on_mode_switch(ports_before_switch):
-    ports_after_switch = _discover_ports()
+async def _port_on_mode_switch(ports_before_switch):
+    ports_after_switch = await _discover_ports()
     new_port = ''
     if len(ports_after_switch) >= len(ports_before_switch) and \
             not set(ports_before_switch) == set(ports_after_switch):
@@ -181,16 +180,17 @@ def _port_on_mode_switch(ports_before_switch):
     return new_port
 
 
-def _port_poll(old_bootloader, ports_before_switch=None):
+async def _port_poll(is_old_bootloader, ports_before_switch=None):
     """
     Checks for the bootloader port
     """
     new_port = ''
-    if old_bootloader:
+    if is_old_bootloader:
         new_port = _port_on_mode_switch(ports_before_switch)
     else:
+        ports = await _discover_ports()
         discovered_ports = list(filter(
-            lambda x: x.endswith('bootloader'), _discover_ports()))
+            lambda x: x.endswith('bootloader'), ports))
         if len(discovered_ports) == 1:
             new_port = '/dev/modules/{}'.format(discovered_ports[0])
     return new_port
@@ -201,41 +201,14 @@ def _has_old_bootloader(module):
                    module.device_info.get('model') == 'temp_deck_v2' else False
 
 
-# async def _discover_ports():
-#     devices = []
-#     if os.environ.get('RUNNING_ON_PI') and os.path.isdir('/dev/modules'):
-#         # try:
-#         #     devices = os.listdir('/dev/modules')
-#         # except FileNotFoundError:
-#         #     try:
-#         #         sleep(2)
-#         #         # Try again. Measure for race condition where port is being
-#         #         # switched in between isdir('/dev/modules') and
-#         #         # listdir('/dev/modules')
-#         #         devices = os.listdir('/dev/modules')
-#         #     except FileNotFoundError:
-#         #         raise Exception("No /dev/modules found. Try again")
-#         for attempt in range(2):
-#             try:
-#                 return os.listdir('/dev/modules')
-#             except FileNotFoundError:
-#                 pass
-#             await asyncio.sleep(2)
-#         raise Exception("No /dev/modules found. Try again")
-#     return devices
-
-def _discover_ports():
-    devices = []
+async def _discover_ports():
     if os.environ.get('RUNNING_ON_PI') and os.path.isdir('/dev/modules'):
-        try:
-            devices = os.listdir('/dev/modules')
-        except FileNotFoundError:
+        for attempt in range(2):
+            # Measure for race condition where port is being switched in
+            # between calls to isdir() and listdir()
             try:
-                sleep(2)
-                # Try again. Measure for race condition where port is being
-                # switched in between isdir('/dev/modules') and
-                # listdir('/dev/modules')
-                devices = os.listdir('/dev/modules')
-            except FileNotFoundError:
-                raise Exception("No /dev/modules found. Try again")
-    return devices
+                return os.listdir('/dev/modules')
+            except (FileNotFoundError, OSError):
+                pass
+            await asyncio.sleep(2)
+        raise Exception("No /dev/modules found. Try again")
