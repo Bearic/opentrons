@@ -2,6 +2,7 @@ import logging
 import asyncio
 import os
 import opentrons
+import tempfile
 from aiohttp import web
 from opentrons import robot
 from opentrons import modules
@@ -79,25 +80,17 @@ async def update_module_firmware(request):
 async def _update_module_firmware(module_serial, data, loop=None):
 
     fw_filename = data.filename
-    log.info('Preparing to flash firmware image {}'.format(
-        fw_filename))
     content = data.file.read()
-
-    with open(fw_filename, 'wb') as wf:
-        wf.write(content)
-
+    log.info('Preparing to flash firmware image {}'.format(fw_filename))
     config_file_path = os.path.join(opentrons.HERE,
                                     'config', 'modules', 'avrdude.conf')
-
-    # returns a dict of 'Result' & 'AVRDude_response'
-    msg = await _upload_to_module(module_serial, fw_filename,
-                                  config_file_path, loop=loop)
+    with tempfile.NamedTemporaryFile(suffix=fw_filename) as fp:
+        fp.write(content)
+        # returns a dict of 'result' & 'avrdude_response'
+        msg = await _upload_to_module(module_serial, fp.name,
+                                      config_file_path, loop=loop)
     log.info('Firmware update complete')
-    try:
-        os.remove(fw_filename)
-    except OSError:
-        pass
-    # Add firmware filename to response message
+
     msg['filename'] = fw_filename
     return msg
 

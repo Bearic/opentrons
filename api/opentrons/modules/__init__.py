@@ -3,8 +3,6 @@ import logging
 import re
 import asyncio
 import time
-# from time import sleep
-# from multiprocessing import Process
 from opentrons.modules.magdeck import MagDeck
 from opentrons.modules.tempdeck import TempDeck
 from opentrons import robot, labware
