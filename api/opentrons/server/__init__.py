@@ -2,7 +2,7 @@
 
 import logging
 import traceback
-from util import environment
+from opentrons.util import environment
 from aiohttp import web
 from .rpc import RPCServer
 from .http import HTTPServer
@@ -33,7 +33,7 @@ async def error_middleware(request, handler):
 
 # Support for running using aiohttp CLI.
 # See: https://docs.aiohttp.org/en/stable/web.html#command-line-interface-cli  # NOQA
-def init(log_file_path, loop=None):
+def init(loop=None):
     """
     Builds an application and sets up RPC and HTTP servers with it
     """
@@ -46,4 +46,4 @@ def init(log_file_path, loop=None):
 
 
 def run(hostname, port, path):
-    web.run_app(init(log_file_path), host=hostname, port=port, path=path)
+    web.run_app(init(), host=hostname, port=port, path=path)

@@ -131,7 +131,8 @@ def main():
     if not ff.disable_home_on_boot():
         log.info("Homing Z axes")
         robot.home_z()
-
+    log.info("The arguments are: -H {} -P {} -U {}".format(
+        args.hostname, args.port, args.path))
     server.run(args.hostname, args.port, args.path)
 
     if not os.environ.get("ENABLE_VIRTUAL_SMOOTHIE"):

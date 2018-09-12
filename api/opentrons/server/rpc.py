@@ -11,8 +11,8 @@ from asyncio import Queue
 from opentrons.server import serialize
 from concurrent.futures import ThreadPoolExecutor
 from opentrons.broker import subscribe, Notifications
-from api.session import SessionManager, Session
-from api.calibration import CalibrationManager
+from opentrons.api.session import SessionManager, Session
+from opentrons.api.calibration import CalibrationManager
 
 log = logging.getLogger(__name__)
 

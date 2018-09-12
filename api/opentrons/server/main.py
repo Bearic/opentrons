@@ -1,4 +1,4 @@
-import server
+import opentrons.server as server
 from argparse import ArgumentParser
 
 
