@@ -1,21 +1,16 @@
 import os
 import logging
-import server
-from server import main as serverMain
+from opentrons import server
+from opentrons.server.main import server_arg_parser
 from argparse import ArgumentParser
 from opentrons import robot, __version__
-from config import feature_flags as ff
+from opentrons.config import feature_flags as ff
 from logging.config import dictConfig
-from util import environment
-from system import udev
-from system import resin
-
+from opentrons.util import environment
+from opentrons.system import udev, resin
 
 log = logging.getLogger(__name__)
 log_file_path = environment.get_path('LOG_DIR')
-
-
-# TODO: move to system/
 
 
 def log_init():
@@ -110,7 +105,7 @@ def main():
 
     arg_parser = ArgumentParser(
         description="Opentrons robot software",
-        parents=[serverMain.server_arg_parser()])
+        parents=[server_arg_parser()])
     args = arg_parser.parse_args()
 
     if args.path:
@@ -131,8 +126,6 @@ def main():
     if not ff.disable_home_on_boot():
         log.info("Homing Z axes")
         robot.home_z()
-    log.info("The arguments are: -H {} -P {} -U {}".format(
-        args.hostname, args.port, args.path))
     server.run(args.hostname, args.port, args.path)
 
     if not os.environ.get("ENABLE_VIRTUAL_SMOOTHIE"):
